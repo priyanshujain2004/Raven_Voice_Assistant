@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { getGeminiClient, getTranscribeModel } from "@/lib/gemini";
+import { getGeminiClient, getTranscribeModelCandidates } from "@/lib/gemini";
 
 export const runtime = "nodejs";
 
@@ -11,6 +11,22 @@ function cleanTranscript(rawText: string): string {
     .replace(/```$/, "")
     .replace(/^"|"$/g, "")
     .trim();
+}
+
+function isModelNotFoundError(error: unknown): boolean {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+
+  const message = error.message.toLowerCase();
+  const status = (error as { status?: number }).status;
+
+  return (
+    status === 404 ||
+    message.includes("404") ||
+    message.includes("not found") ||
+    message.includes("is not found")
+  );
 }
 
 export async function POST(request: Request) {
@@ -47,33 +63,60 @@ export async function POST(request: Request) {
       "Transcribe this audio into plain text. Return only the transcript and no markdown.";
 
     const client = getGeminiClient();
-    const modelName = getTranscribeModel();
-    const model = client.getGenerativeModel({ model: modelName });
+    const modelCandidates = getTranscribeModelCandidates();
 
-    const result = await model.generateContent([
-      {
-        text: prompt,
-      },
-      {
-        inlineData: {
-          data: audioBase64,
-          mimeType,
-        },
-      },
-    ]);
+    let lastModelError: Error | null = null;
 
-    const transcript = cleanTranscript(result.response.text());
+    for (const modelName of modelCandidates) {
+      try {
+        const response = await client.models.generateContent({
+          model: modelName,
+          contents: [
+            {
+              text: prompt,
+            },
+            {
+              inlineData: {
+                data: audioBase64,
+                mimeType,
+              },
+            },
+          ],
+          config: {
+            temperature: 0.1,
+          },
+        });
 
-    if (!transcript) {
-      return NextResponse.json(
-        {
-          error: "No transcript returned from Gemini.",
-        },
-        { status: 502 },
-      );
+        const transcript = cleanTranscript((response.text ?? "").trim());
+
+        if (!transcript) {
+          continue;
+        }
+
+        return NextResponse.json({ transcript, model: modelName });
+      } catch (error) {
+        if (isModelNotFoundError(error)) {
+          lastModelError =
+            error instanceof Error
+              ? error
+              : new Error(`Model not found: ${modelName}`);
+          continue;
+        }
+
+        throw error;
+      }
     }
 
-    return NextResponse.json({ transcript, model: modelName });
+    if (lastModelError) {
+      throw lastModelError;
+    }
+
+    return NextResponse.json(
+      {
+        error: "No transcript returned from Gemini for all configured models.",
+      },
+      { status: 502 },
+    );
   } catch (error) {
     const message =
       error instanceof Error

@@ -2,6 +2,10 @@
 
 Raven is a personal AI voice assistant web app built with Next.js and Gemini.
 
+This project uses the newer `@google/genai` SDK with server-side model fallback,
+so it can try Gemini 3.1 first and automatically fail over if unavailable for
+your key or API version.
+
 It supports:
 
 - Voice input with live browser speech recognition when available.
@@ -50,10 +54,22 @@ Required:
 
 Optional:
 
-- `GEMINI_CHAT_MODEL`: Defaults to `gemini-2.5-pro`.
-- `GEMINI_TRANSCRIBE_MODEL`: Defaults to `gemini-2.0-flash`.
+- `GEMINI_API_VERSION`: Defaults to `v1` in the example file.
+- `GEMINI_CHAT_MODEL`: Primary chat model. Example: `gemini-3.1-pro`.
+- `GEMINI_CHAT_FALLBACK_MODELS`: Comma-separated backups.
+- `GEMINI_TRANSCRIBE_MODEL`: Primary speech-to-text model.
+- `GEMINI_TRANSCRIBE_FALLBACK_MODELS`: Comma-separated backups.
 
-## 3. Deploy to Vercel
+## 3. Rotate Exposed Key (Important)
+
+If your API key was ever committed or shared in a screenshot/text, rotate it.
+
+1. Open Google AI Studio API Keys page.
+2. Delete the exposed key.
+3. Create a new key.
+4. Put the new key only in `.env.local` (local) and Vercel env vars (cloud).
+
+## 4. Deploy to Vercel
 
 1. Push this folder to GitHub.
 2. Import the repository in Vercel.
@@ -65,13 +81,13 @@ Optional:
 4. Deploy.
 5. Open your Vercel URL from laptop and phone.
 
-## 4. Browser Notes
+## 5. Browser Notes
 
 - Best voice capture experience: Chrome/Edge.
 - On browsers that do not support live speech recognition, Raven records audio and transcribes via Gemini.
 - Voice playback depends on browser speech synthesis voices installed on the device.
 
-## 5. Project Structure
+## 6. Project Structure
 
 - `app/page.tsx`: Voice UI and client interactions.
 - `app/api/chat/route.ts`: Gemini conversational reply endpoint.

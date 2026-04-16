@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { getChatModel, getGeminiClient } from "@/lib/gemini";
+import { getChatModelCandidates, getGeminiClient } from "@/lib/gemini";
 
 export const runtime = "nodejs";
 
@@ -70,6 +70,22 @@ function buildPrompt(
   ].join("\n\n");
 }
 
+function isModelNotFoundError(error: unknown): boolean {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+
+  const message = error.message.toLowerCase();
+  const status = (error as { status?: number }).status;
+
+  return (
+    status === 404 ||
+    message.includes("404") ||
+    message.includes("not found") ||
+    message.includes("is not found")
+  );
+}
+
 export async function POST(request: Request) {
   try {
     const body = (await request.json()) as {
@@ -92,30 +108,52 @@ export async function POST(request: Request) {
     const prompt = buildPrompt(message, history);
 
     const client = getGeminiClient();
-    const modelName = getChatModel();
-    const model = client.getGenerativeModel({ model: modelName });
+    const modelCandidates = getChatModelCandidates();
 
-    const result = await model.generateContent({
-      contents: [{ role: "user", parts: [{ text: prompt }] }],
-      generationConfig: {
-        temperature: 0.8,
-        topP: 0.95,
-        maxOutputTokens: 900,
-      },
-    });
+    let lastModelError: Error | null = null;
 
-    const reply = result.response.text().trim();
+    for (const modelName of modelCandidates) {
+      try {
+        const response = await client.models.generateContent({
+          model: modelName,
+          contents: prompt,
+          config: {
+            temperature: 1,
+            topP: 0.95,
+            maxOutputTokens: 900,
+          },
+        });
 
-    if (!reply) {
-      return NextResponse.json(
-        { error: "Gemini returned an empty response." },
-        {
-          status: 502,
-        },
-      );
+        const reply = (response.text ?? "").trim();
+
+        if (!reply) {
+          continue;
+        }
+
+        return NextResponse.json({ reply, model: modelName });
+      } catch (error) {
+        if (isModelNotFoundError(error)) {
+          lastModelError =
+            error instanceof Error
+              ? error
+              : new Error(`Model not found: ${modelName}`);
+          continue;
+        }
+
+        throw error;
+      }
     }
 
-    return NextResponse.json({ reply, model: modelName });
+    if (lastModelError) {
+      throw lastModelError;
+    }
+
+    return NextResponse.json(
+      { error: "Gemini returned an empty response for all configured models." },
+      {
+        status: 502,
+      },
+    );
   } catch (error) {
     const message =
       error instanceof Error

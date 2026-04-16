@@ -1,6 +1,11 @@
 "use client";
 
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import {
+  actionNeedsConfirmation,
+  type AgentAction,
+  describeAgentAction,
+} from "@/lib/agent-actions";
 
 type ChatRole = "user" | "assistant";
 type InputSource = "voice" | "text";
@@ -26,12 +31,21 @@ type SpeechRecognitionLike = {
 };
 
 type SpeechRecognitionCtor = new () => SpeechRecognitionLike;
+type ActionRunMode = "manual" | "autopilot";
 
 interface ChatMessage {
   id: string;
   role: ChatRole;
   text: string;
   source: InputSource;
+  createdAt: string;
+}
+
+interface QueuedAction {
+  id: string;
+  action: AgentAction;
+  status: "pending" | "running" | "done" | "failed";
+  detail?: string;
   createdAt: string;
 }
 
@@ -68,6 +82,48 @@ function formatClockTime(isoDate: string): string {
   }).format(new Date(isoDate));
 }
 
+function openUrlInNewTab(url: string): boolean {
+  const popup = window.open("", "_blank");
+
+  if (!popup) {
+    return false;
+  }
+
+  try {
+    popup.opener = null;
+  } catch {
+    // Ignore browsers that disallow writing opener.
+  }
+
+  popup.location.href = url;
+  return true;
+}
+
+function getVoiceCaptureErrorMessage(
+  errorCode: string | undefined,
+  hasRecorderFallback: boolean,
+): string {
+  switch (errorCode) {
+    case "network":
+      return hasRecorderFallback
+        ? "Live speech recognition service is unreachable (network). Raven switched to recorder mode. Tap the orb again to record and transcribe with Gemini."
+        : "Live speech recognition service is unreachable (network). Check internet, VPN, firewall, and browser privacy settings.";
+    case "not-allowed":
+    case "service-not-allowed":
+      return "Microphone permission is blocked for this site. Allow microphone access and try again.";
+    case "audio-capture":
+      return "No microphone input device is available.";
+    case "no-speech":
+      return "No speech was detected. Please try speaking closer to the microphone.";
+    case "aborted":
+      return "Voice capture was cancelled.";
+    default:
+      return errorCode
+        ? `Voice capture error: ${errorCode}.`
+        : "Voice capture failed unexpectedly.";
+  }
+}
+
 function blobToBase64(audioBlob: Blob): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -99,7 +155,10 @@ export default function Home() {
   const [supportsLiveRecognition, setSupportsLiveRecognition] = useState(false);
   const [supportsRecorderFallback, setSupportsRecorderFallback] =
     useState(false);
+  const [preferRecorderFallback, setPreferRecorderFallback] = useState(false);
   const [usingRecorderFallback, setUsingRecorderFallback] = useState(false);
+  const [queuedActions, setQueuedActions] = useState<QueuedAction[]>([]);
+  const [autopilotEnabled, setAutopilotEnabled] = useState(false);
 
   const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
   const pendingTranscriptRef = useRef("");
@@ -107,16 +166,21 @@ export default function Home() {
   const mediaStreamRef = useRef<MediaStream | null>(null);
   const mediaChunksRef = useRef<Blob[]>([]);
   const chatScrollerRef = useRef<HTMLDivElement | null>(null);
+  const voicePlaybackRef = useRef(voicePlaybackEnabled);
 
   const isBusy = isListening || isThinking;
   const quickPrompts = useMemo(
     () => [
-      "Plan my day in 4 priorities.",
-      "Summarize my top goals for this week.",
-      "Give me a 60-second confidence boost before a meeting.",
+      "Find nearby coffee shops and open maps.",
+      "Search the web for today's AI news.",
+      "Set a 20-minute focus timer and motivate me.",
     ],
     [],
   );
+
+  useEffect(() => {
+    voicePlaybackRef.current = voicePlaybackEnabled;
+  }, [voicePlaybackEnabled]);
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -124,6 +188,7 @@ export default function Home() {
     }
 
     setSupportsLiveRecognition(Boolean(getSpeechRecognitionCtor()));
+    setPreferRecorderFallback(false);
     setSupportsRecorderFallback(
       Boolean(window.MediaRecorder && navigator.mediaDevices?.getUserMedia),
     );
@@ -207,6 +272,211 @@ export default function Home() {
     window.speechSynthesis.speak(utterance);
   }
 
+  async function executeAgentAction(
+    action: AgentAction,
+    runMode: ActionRunMode,
+  ): Promise<string> {
+    switch (action.kind) {
+      case "open_url": {
+        if (action.newTab === false) {
+          window.location.assign(action.url);
+          return `Opened ${action.url} in current tab.`;
+        }
+
+        const opened = openUrlInNewTab(action.url);
+        if (!opened) {
+          throw new Error(
+            runMode === "autopilot"
+              ? "Popup blocked for automatic action. Tap Run to open it manually."
+              : "Popup blocked. Allow popups and try again.",
+          );
+        }
+
+        return `Opened ${action.url}`;
+      }
+      case "web_search": {
+        const url = `https://www.google.com/search?q=${encodeURIComponent(action.query)}`;
+        const opened = openUrlInNewTab(url);
+
+        if (!opened) {
+          throw new Error(
+            runMode === "autopilot"
+              ? "Popup blocked for automatic action. Tap Run to open it manually."
+              : "Popup blocked. Allow popups and try again.",
+          );
+        }
+
+        return `Searching web for: ${action.query}`;
+      }
+      case "open_map": {
+        const url = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(action.query)}`;
+        const opened = openUrlInNewTab(url);
+
+        if (!opened) {
+          throw new Error(
+            runMode === "autopilot"
+              ? "Popup blocked for automatic action. Tap Run to open it manually."
+              : "Popup blocked. Allow popups and try again.",
+          );
+        }
+
+        return `Opening map for: ${action.query}`;
+      }
+      case "send_email": {
+        const queryParams = new URLSearchParams();
+        if (action.subject) {
+          queryParams.set("subject", action.subject);
+        }
+        if (action.body) {
+          queryParams.set("body", action.body);
+        }
+
+        const query = queryParams.toString();
+        const to = encodeURIComponent(action.to ?? "");
+        const mailtoUrl = `mailto:${to}${query ? `?${query}` : ""}`;
+
+        window.location.href = mailtoUrl;
+        return "Opened your email composer.";
+      }
+      case "call_phone": {
+        window.location.href = `tel:${action.phoneNumber}`;
+        return `Opening dialer for ${action.phoneNumber}`;
+      }
+      case "send_sms": {
+        const bodyPart = action.body
+          ? `?body=${encodeURIComponent(action.body)}`
+          : "";
+        window.location.href = `sms:${action.phoneNumber}${bodyPart}`;
+        return `Opening messages for ${action.phoneNumber}`;
+      }
+      case "copy_text": {
+        if (!navigator.clipboard?.writeText) {
+          throw new Error("Clipboard API is unavailable in this browser.");
+        }
+
+        await navigator.clipboard.writeText(action.text);
+        return "Copied text to clipboard.";
+      }
+      case "share_text": {
+        if (navigator.share) {
+          await navigator.share({ text: action.text });
+          return "Share sheet opened.";
+        }
+
+        if (navigator.clipboard?.writeText) {
+          await navigator.clipboard.writeText(action.text);
+          return "Share API unavailable. Copied text instead.";
+        }
+
+        throw new Error("Share API is unavailable in this browser.");
+      }
+      case "set_timer": {
+        const timerLabel = action.label?.trim() || "Raven timer";
+        const completionMessage = `${timerLabel} is complete.`;
+
+        window.setTimeout(() => {
+          setMessages((currentMessages) => [
+            ...currentMessages,
+            {
+              id: createMessageId(),
+              role: "assistant",
+              text: completionMessage,
+              source: "text",
+              createdAt: new Date().toISOString(),
+            },
+          ]);
+
+          if (voicePlaybackRef.current) {
+            const utterance = new SpeechSynthesisUtterance(completionMessage);
+            utterance.rate = 0.96;
+            utterance.pitch = 1;
+            utterance.lang = "en-US";
+            window.speechSynthesis.cancel();
+            window.speechSynthesis.speak(utterance);
+          }
+
+          if (
+            "Notification" in window &&
+            Notification.permission === "granted"
+          ) {
+            new Notification("Raven Timer", { body: completionMessage });
+          }
+        }, action.seconds * 1000);
+
+        if ("Notification" in window && Notification.permission === "default") {
+          void Notification.requestPermission();
+        }
+
+        return `Timer set for ${action.seconds} seconds.`;
+      }
+      default:
+        throw new Error("Unsupported action kind.");
+    }
+  }
+
+  async function runQueuedAction(
+    queuedActionId: string,
+    action: AgentAction,
+    runMode: ActionRunMode = "manual",
+  ): Promise<void> {
+    setErrorMessage("");
+
+    setQueuedActions((currentActions) =>
+      currentActions.map((queuedAction) =>
+        queuedAction.id === queuedActionId
+          ? { ...queuedAction, status: "running", detail: "" }
+          : queuedAction,
+      ),
+    );
+
+    try {
+      const detail = await executeAgentAction(action, runMode);
+      setQueuedActions((currentActions) =>
+        currentActions.map((queuedAction) =>
+          queuedAction.id === queuedActionId
+            ? { ...queuedAction, status: "done", detail }
+            : queuedAction,
+        ),
+      );
+
+      setErrorMessage("");
+    } catch (error) {
+      const detail =
+        error instanceof Error ? error.message : "Action execution failed.";
+
+      setQueuedActions((currentActions) =>
+        currentActions.map((queuedAction) =>
+          queuedAction.id === queuedActionId
+            ? { ...queuedAction, status: "failed", detail }
+            : queuedAction,
+        ),
+      );
+
+      setErrorMessage(detail);
+    }
+  }
+
+  function clearCompletedActions(): void {
+    setQueuedActions((currentActions) =>
+      currentActions.filter((action) => action.status !== "done"),
+    );
+  }
+
+  function getActionStatusLabel(status: QueuedAction["status"]): string {
+    switch (status) {
+      case "pending":
+        return "Pending";
+      case "running":
+        return "Running";
+      case "done":
+        return "Done";
+      case "failed":
+        return "Failed";
+      default:
+        return "Pending";
+    }
+  }
+
   async function submitPrompt(
     rawText: string,
     source: InputSource,
@@ -251,7 +521,12 @@ export default function Home() {
         }),
       });
 
-      const payload: { reply?: string; error?: string } = await response.json();
+      const payload: {
+        reply?: string;
+        actions?: AgentAction[];
+        model?: string;
+        error?: string;
+      } = await response.json();
 
       if (!response.ok) {
         throw new Error(
@@ -273,6 +548,39 @@ export default function Home() {
       };
 
       setMessages((currentMessages) => [...currentMessages, assistantMessage]);
+
+      const plannedActions = Array.isArray(payload.actions)
+        ? payload.actions
+        : [];
+
+      if (plannedActions.length > 0) {
+        const newQueuedActions: QueuedAction[] = plannedActions.map(
+          (action) => ({
+            id: createMessageId(),
+            action,
+            status: "pending",
+            createdAt: new Date().toISOString(),
+          }),
+        );
+
+        setQueuedActions((currentActions) => [
+          ...newQueuedActions,
+          ...currentActions,
+        ]);
+
+        if (autopilotEnabled) {
+          newQueuedActions.forEach((queuedAction) => {
+            if (!actionNeedsConfirmation(queuedAction.action)) {
+              void runQueuedAction(
+                queuedAction.id,
+                queuedAction.action,
+                "autopilot",
+              );
+            }
+          });
+        }
+      }
+
       speakReply(reply);
     } catch (error) {
       const message =
@@ -404,10 +712,13 @@ export default function Home() {
     };
 
     recognition.onerror = (event: { error?: string }) => {
+      const errorCode = event.error;
+      if (errorCode === "network" && supportsRecorderFallback) {
+        setPreferRecorderFallback(true);
+      }
+
       setErrorMessage(
-        event.error
-          ? `Voice capture error: ${event.error}.`
-          : "Voice capture failed unexpectedly.",
+        getVoiceCaptureErrorMessage(errorCode, supportsRecorderFallback),
       );
       setIsListening(false);
       setLiveTranscript("");
@@ -447,6 +758,11 @@ export default function Home() {
   async function handleOrbClick(): Promise<void> {
     if (isListening) {
       stopListening();
+      return;
+    }
+
+    if (preferRecorderFallback && supportsRecorderFallback) {
+      await startRecorderFallback();
       return;
     }
 
@@ -557,12 +873,94 @@ export default function Home() {
             </p>
           ) : null}
 
+          {supportsLiveRecognition && preferRecorderFallback ? (
+            <p className="compat-note">
+              Live speech recognition is temporarily unreachable on this
+              network. Raven will record audio and use Gemini transcription for
+              voice input.
+            </p>
+          ) : null}
+
           {!supportsLiveRecognition ? (
             <p className="compat-note">
               Live speech recognition is unavailable in this browser. Raven will
               record audio and ask Gemini to transcribe it after you stop.
             </p>
           ) : null}
+
+          <section className="action-center">
+            <div className="action-head">
+              <h2>Action Center</h2>
+              <button
+                type="button"
+                className="clear-actions"
+                onClick={clearCompletedActions}
+                disabled={queuedActions.every(
+                  (action) => action.status !== "done",
+                )}
+              >
+                Clear Done
+              </button>
+            </div>
+
+            <label className="voice-toggle">
+              <input
+                type="checkbox"
+                checked={autopilotEnabled}
+                onChange={(event) => setAutopilotEnabled(event.target.checked)}
+              />
+              <span>Autopilot safe actions</span>
+            </label>
+
+            <p className="action-subtitle">
+              Raven can plan and run actions on this device. Sensitive actions
+              stay manual unless you run them.
+            </p>
+
+            {queuedActions.length === 0 ? (
+              <p className="action-empty">No planned actions yet.</p>
+            ) : (
+              <ul className="action-list">
+                {queuedActions.map((queuedAction) => (
+                  <li
+                    key={queuedAction.id}
+                    className={`action-item ${queuedAction.status}`}
+                  >
+                    <p className="action-title">
+                      {describeAgentAction(queuedAction.action)}
+                    </p>
+
+                    {queuedAction.detail ? (
+                      <p className="action-detail">{queuedAction.detail}</p>
+                    ) : null}
+
+                    <div className="action-controls">
+                      <span className={`action-status ${queuedAction.status}`}>
+                        {getActionStatusLabel(queuedAction.status)}
+                      </span>
+
+                      {queuedAction.status !== "done" &&
+                      queuedAction.status !== "running" ? (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            void runQueuedAction(
+                              queuedAction.id,
+                              queuedAction.action,
+                              "manual",
+                            );
+                          }}
+                          disabled={isThinking}
+                        >
+                          Run
+                        </button>
+                      ) : null}
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </section>
 
           <ul className="quick-prompts">
             {quickPrompts.map((prompt) => (

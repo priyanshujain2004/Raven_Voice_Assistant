@@ -3,7 +3,7 @@
 Raven is a personal AI voice assistant web app built with Next.js and Gemini.
 
 This project uses the newer `@google/genai` SDK with server-side model fallback,
-so it can try Gemini 3.1 first and automatically fail over if unavailable for
+so it uses flash-first defaults and automatically fail over if unavailable for
 your key or API version.
 
 It supports:
@@ -11,6 +11,7 @@ It supports:
 - Voice input with live browser speech recognition when available.
 - Automatic audio recording fallback + Gemini transcription for browsers without live recognition.
 - Gemini chat responses with conversational memory.
+- Agentic action planning and execution from prompts (Action Center).
 - Voice playback of responses using browser speech synthesis.
 - Mobile and laptop usage from a single deployed Vercel URL.
 
@@ -55,10 +56,15 @@ Required:
 Optional:
 
 - `GEMINI_API_VERSION`: Defaults to `v1` in the example file.
-- `GEMINI_CHAT_MODEL`: Primary chat model. Example: `gemini-3.1-pro`.
+- `GEMINI_CHAT_MODEL`: Primary chat model. Default: `gemini-2.5-flash`.
 - `GEMINI_CHAT_FALLBACK_MODELS`: Comma-separated backups (recommend flash-first order).
-- `GEMINI_TRANSCRIBE_MODEL`: Primary speech-to-text model.
+- `GEMINI_TRANSCRIBE_MODEL`: Primary speech-to-text model. Default: `gemini-2.5-flash`.
 - `GEMINI_TRANSCRIBE_FALLBACK_MODELS`: Comma-separated backups (recommend flash-first order).
+
+If you want Pro quality and have enough quota/billing, set:
+
+- `GEMINI_CHAT_MODEL=gemini-3.1-pro`
+- `GEMINI_TRANSCRIBE_MODEL=gemini-3.1-pro`
 
 ## 3. Rotate Exposed Key (Important)
 
@@ -86,6 +92,8 @@ If your API key was ever committed or shared in a screenshot/text, rotate it.
 - Best voice capture experience: Chrome/Edge.
 - On browsers that do not support live speech recognition, Raven records audio and transcribes via Gemini.
 - Voice playback depends on browser speech synthesis voices installed on the device.
+- Action Center supports cross-device actions like opening links, web search, maps, email, phone, SMS, clipboard, sharing, and timers.
+- Some actions require user gesture or popup permission depending on browser security.
 
 ## 6. Project Structure
 

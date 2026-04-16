@@ -25,18 +25,33 @@ function getErrorMessage(error: unknown): string {
   return String(error ?? "");
 }
 
-function getRetryDelayHint(errorMessage: string): string {
+function getRetryDelayHintSeconds(errorMessage: string): number | null {
   const retryInMatch = errorMessage.match(/retry in\s+([\d.]+)s/i);
   if (retryInMatch) {
-    return retryInMatch[1];
+    const parsedSeconds = Number(retryInMatch[1]);
+    if (Number.isFinite(parsedSeconds) && parsedSeconds > 0) {
+      return Math.ceil(parsedSeconds);
+    }
   }
 
-  const retryDelayMatch = errorMessage.match(/"retryDelay":"(\d+)s"/i);
+  const retryDelayMatch = errorMessage.match(/"retryDelay":"([\d.]+)s"/i);
   if (retryDelayMatch) {
-    return retryDelayMatch[1];
+    const parsedSeconds = Number(retryDelayMatch[1]);
+    if (Number.isFinite(parsedSeconds) && parsedSeconds > 0) {
+      return Math.ceil(parsedSeconds);
+    }
   }
 
-  return "";
+  return null;
+}
+
+function formatRetryDelay(seconds: number): string {
+  if (seconds >= 60) {
+    const minutes = Math.ceil(seconds / 60);
+    return `${minutes} minute${minutes === 1 ? "" : "s"}`;
+  }
+
+  return `${seconds} second${seconds === 1 ? "" : "s"}`;
 }
 
 export function getGeminiClient(): GoogleGenAI {
@@ -58,20 +73,20 @@ export function getGeminiClient(): GoogleGenAI {
 }
 
 export function getChatModelCandidates(): string[] {
-  const primary = process.env.GEMINI_CHAT_MODEL?.trim() || "gemini-3.1-pro";
+  const primary = process.env.GEMINI_CHAT_MODEL?.trim() || "gemini-2.5-flash";
   const fallback = splitModelList(process.env.GEMINI_CHAT_FALLBACK_MODELS);
 
   return uniqueModels([
     primary,
     ...fallback,
-    "gemini-2.0-flash",
     "gemini-2.5-flash",
+    "gemini-2.0-flash",
   ]);
 }
 
 export function getTranscribeModelCandidates(): string[] {
   const primary =
-    process.env.GEMINI_TRANSCRIBE_MODEL?.trim() || "gemini-3.1-pro";
+    process.env.GEMINI_TRANSCRIBE_MODEL?.trim() || "gemini-2.5-flash";
   const fallback = splitModelList(
     process.env.GEMINI_TRANSCRIBE_FALLBACK_MODELS,
   );
@@ -79,8 +94,8 @@ export function getTranscribeModelCandidates(): string[] {
   return uniqueModels([
     primary,
     ...fallback,
-    "gemini-2.0-flash",
     "gemini-2.5-flash",
+    "gemini-2.0-flash",
   ]);
 }
 
@@ -137,9 +152,9 @@ export function formatGeminiErrorForClient(error: unknown): string {
   const message = getErrorMessage(error);
 
   if (isQuotaOrRateLimitError(error)) {
-    const retrySeconds = getRetryDelayHint(message);
+    const retrySeconds = getRetryDelayHintSeconds(message);
     const retryText = retrySeconds
-      ? ` Try again in about ${retrySeconds} seconds.`
+      ? ` Try again in about ${formatRetryDelay(retrySeconds)}.`
       : "";
 
     return `Gemini quota or rate limit reached for current models.${retryText} Raven can use Flash fallbacks; if this keeps happening, enable billing or switch to lower-cost models in your env settings.`;

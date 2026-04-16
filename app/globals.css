@@ -316,6 +316,122 @@ a {
   text-align: left;
 }
 
+.action-center {
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 16px;
+  padding: 0.82rem;
+  background: rgba(0, 0, 0, 0.2);
+  display: grid;
+  gap: 0.62rem;
+}
+
+.action-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+}
+
+.action-head h2 {
+  font-size: 0.96rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-muted);
+}
+
+.clear-actions {
+  border: 1px solid rgba(255, 255, 255, 0.24);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text-primary);
+  font: inherit;
+  padding: 0.4rem 0.7rem;
+  cursor: pointer;
+}
+
+.clear-actions:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.action-subtitle,
+.action-empty,
+.action-detail {
+  color: var(--text-muted);
+  font-size: 0.86rem;
+  line-height: 1.4;
+}
+
+.action-list {
+  list-style: none;
+  display: grid;
+  gap: 0.46rem;
+}
+
+.action-item {
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  padding: 0.56rem 0.62rem;
+  background: rgba(255, 255, 255, 0.05);
+  display: grid;
+  gap: 0.35rem;
+}
+
+.action-item.running {
+  border-color: rgba(255, 209, 102, 0.5);
+}
+
+.action-item.done {
+  border-color: rgba(69, 216, 170, 0.5);
+}
+
+.action-item.failed {
+  border-color: rgba(255, 121, 135, 0.6);
+}
+
+.action-title {
+  font-weight: 600;
+}
+
+.action-controls {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.action-controls button {
+  border: 0;
+  border-radius: 10px;
+  padding: 0.42rem 0.72rem;
+  font: inherit;
+  font-weight: 600;
+  color: #10243d;
+  background: linear-gradient(130deg, var(--accent), var(--accent-strong));
+  cursor: pointer;
+}
+
+.action-controls button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.action-status {
+  font-size: 0.76rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  font-family: var(--font-mono), monospace;
+  color: var(--text-muted);
+}
+
+.action-status.done {
+  color: var(--good);
+}
+
+.action-status.failed {
+  color: var(--danger);
+}
+
 .chat-panel {
   display: flex;
   flex-direction: column;

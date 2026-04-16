@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { parseAgentPlanText } from "@/lib/agent-actions";
 import {
   formatGeminiErrorForClient,
   getChatModelCandidates,
@@ -12,6 +13,22 @@ export const runtime = "nodejs";
 
 const ASSISTANT_IDENTITY =
   "You are Raven, a practical and warm personal AI voice assistant. Keep replies concise unless asked for depth. Ask one clarifying question only when needed.";
+
+const ACTION_RULES = [
+  "You can plan client-side actions for the app to execute.",
+  "Return strict JSON only with keys: reply, actions.",
+  "Allowed action kinds: open_url, web_search, open_map, send_email, call_phone, send_sms, copy_text, share_text, set_timer.",
+  "For open_url provide: { kind, url } and use https URLs.",
+  "For web_search provide: { kind, query }.",
+  "For open_map provide: { kind, query }.",
+  "For send_email provide: { kind, to?, subject?, body? }.",
+  "For call_phone/send_sms provide: { kind, phoneNumber, body? }.",
+  "For copy_text/share_text provide: { kind, text }.",
+  "For set_timer provide: { kind, seconds, label? }.",
+  "Include 0 to 4 actions only when user intent is clearly actionable.",
+  "Do not include unsafe, destructive, privileged OS command execution actions.",
+  'JSON output format example: {"reply":"...","actions":[{"kind":"web_search","query":"latest weather in mumbai"}]}',
+].join("\n");
 
 type NormalizedHistoryItem = {
   role: "user" | "assistant";
@@ -69,11 +86,12 @@ function buildPrompt(
 
   return [
     ASSISTANT_IDENTITY,
+    ACTION_RULES,
     "Conversation context:",
     historyBlock,
     "Latest user message:",
     message,
-    "Respond as Raven.",
+    "Respond as Raven and output only JSON.",
   ].join("\n\n");
 }
 
@@ -100,28 +118,47 @@ export async function POST(request: Request) {
 
     const client = getGeminiClient();
     const modelCandidates = getChatModelCandidates();
+    const apiVersion = (process.env.GEMINI_API_VERSION ?? "")
+      .trim()
+      .toLowerCase();
 
     let lastModelError: Error | null = null;
 
     for (const modelName of modelCandidates) {
       try {
+        const generationConfig: {
+          temperature: number;
+          topP: number;
+          maxOutputTokens: number;
+          responseMimeType?: string;
+        } = {
+          temperature: 1,
+          topP: 0.95,
+          maxOutputTokens: 900,
+        };
+
+        if (apiVersion !== "v1") {
+          generationConfig.responseMimeType = "application/json";
+        }
+
         const response = await client.models.generateContent({
           model: modelName,
           contents: prompt,
-          config: {
-            temperature: 1,
-            topP: 0.95,
-            maxOutputTokens: 900,
-          },
+          config: generationConfig,
         });
 
-        const reply = (response.text ?? "").trim();
+        const plan = parseAgentPlanText(response.text ?? "");
+        const reply = plan.reply.trim();
 
         if (!reply) {
           continue;
         }
 
-        return NextResponse.json({ reply, model: modelName });
+        return NextResponse.json({
+          reply,
+          actions: plan.actions,
+          model: modelName,
+        });
       } catch (error) {
         if (isModelNotFoundError(error) || isQuotaOrRateLimitError(error)) {
           lastModelError =

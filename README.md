@@ -56,9 +56,9 @@ Optional:
 
 - `GEMINI_API_VERSION`: Defaults to `v1` in the example file.
 - `GEMINI_CHAT_MODEL`: Primary chat model. Example: `gemini-3.1-pro`.
-- `GEMINI_CHAT_FALLBACK_MODELS`: Comma-separated backups.
+- `GEMINI_CHAT_FALLBACK_MODELS`: Comma-separated backups (recommend flash-first order).
 - `GEMINI_TRANSCRIBE_MODEL`: Primary speech-to-text model.
-- `GEMINI_TRANSCRIBE_FALLBACK_MODELS`: Comma-separated backups.
+- `GEMINI_TRANSCRIBE_FALLBACK_MODELS`: Comma-separated backups (recommend flash-first order).
 
 ## 3. Rotate Exposed Key (Important)
 

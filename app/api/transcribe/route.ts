@@ -1,5 +1,12 @@
 import { NextResponse } from "next/server";
-import { getGeminiClient, getTranscribeModelCandidates } from "@/lib/gemini";
+import {
+  formatGeminiErrorForClient,
+  getGeminiClient,
+  getGeminiErrorStatus,
+  getTranscribeModelCandidates,
+  isModelNotFoundError,
+  isQuotaOrRateLimitError,
+} from "@/lib/gemini";
 
 export const runtime = "nodejs";
 
@@ -11,22 +18,6 @@ function cleanTranscript(rawText: string): string {
     .replace(/```$/, "")
     .replace(/^"|"$/g, "")
     .trim();
-}
-
-function isModelNotFoundError(error: unknown): boolean {
-  if (!(error instanceof Error)) {
-    return false;
-  }
-
-  const message = error.message.toLowerCase();
-  const status = (error as { status?: number }).status;
-
-  return (
-    status === 404 ||
-    message.includes("404") ||
-    message.includes("not found") ||
-    message.includes("is not found")
-  );
 }
 
 export async function POST(request: Request) {
@@ -95,11 +86,11 @@ export async function POST(request: Request) {
 
         return NextResponse.json({ transcript, model: modelName });
       } catch (error) {
-        if (isModelNotFoundError(error)) {
+        if (isModelNotFoundError(error) || isQuotaOrRateLimitError(error)) {
           lastModelError =
             error instanceof Error
               ? error
-              : new Error(`Model not found: ${modelName}`);
+              : new Error(`Model unavailable: ${modelName}`);
           continue;
         }
 
@@ -118,16 +109,14 @@ export async function POST(request: Request) {
       { status: 502 },
     );
   } catch (error) {
-    const message =
-      error instanceof Error
-        ? error.message
-        : "Unexpected error while transcribing audio.";
+    const status = getGeminiErrorStatus(error);
+    const message = formatGeminiErrorForClient(error);
 
     return NextResponse.json(
       {
         error: message,
       },
-      { status: 500 },
+      { status },
     );
   }
 }

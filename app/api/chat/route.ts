@@ -1,5 +1,12 @@
 import { NextResponse } from "next/server";
-import { getChatModelCandidates, getGeminiClient } from "@/lib/gemini";
+import {
+  formatGeminiErrorForClient,
+  getChatModelCandidates,
+  getGeminiClient,
+  getGeminiErrorStatus,
+  isModelNotFoundError,
+  isQuotaOrRateLimitError,
+} from "@/lib/gemini";
 
 export const runtime = "nodejs";
 
@@ -70,22 +77,6 @@ function buildPrompt(
   ].join("\n\n");
 }
 
-function isModelNotFoundError(error: unknown): boolean {
-  if (!(error instanceof Error)) {
-    return false;
-  }
-
-  const message = error.message.toLowerCase();
-  const status = (error as { status?: number }).status;
-
-  return (
-    status === 404 ||
-    message.includes("404") ||
-    message.includes("not found") ||
-    message.includes("is not found")
-  );
-}
-
 export async function POST(request: Request) {
   try {
     const body = (await request.json()) as {
@@ -132,11 +123,11 @@ export async function POST(request: Request) {
 
         return NextResponse.json({ reply, model: modelName });
       } catch (error) {
-        if (isModelNotFoundError(error)) {
+        if (isModelNotFoundError(error) || isQuotaOrRateLimitError(error)) {
           lastModelError =
             error instanceof Error
               ? error
-              : new Error(`Model not found: ${modelName}`);
+              : new Error(`Model unavailable: ${modelName}`);
           continue;
         }
 
@@ -155,15 +146,13 @@ export async function POST(request: Request) {
       },
     );
   } catch (error) {
-    const message =
-      error instanceof Error
-        ? error.message
-        : "Unexpected error while calling Gemini.";
+    const status = getGeminiErrorStatus(error);
+    const message = formatGeminiErrorForClient(error);
 
     return NextResponse.json(
       { error: message },
       {
-        status: 500,
+        status,
       },
     );
   }

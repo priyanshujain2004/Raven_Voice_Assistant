@@ -18,7 +18,7 @@ const ASSISTANT_IDENTITY =
 const ACTION_RULES = [
   "You can plan client-side actions for the app to execute.",
   "Return strict JSON only with keys: reply, actions.",
-  "Allowed action kinds: open_url, web_search, open_map, send_email, call_phone, send_sms, copy_text, share_text, set_timer.",
+  "Allowed action kinds: open_url, web_search, open_map, send_email, call_phone, send_sms, copy_text, share_text, set_timer, desktop_bridge_action.",
   "For open_url provide: { kind, url } and use https URLs.",
   "For web_search provide: { kind, query }.",
   "For open_map provide: { kind, query }.",
@@ -26,14 +26,21 @@ const ACTION_RULES = [
   "For call_phone/send_sms provide: { kind, phoneNumber, body? }.",
   "For copy_text/share_text provide: { kind, text }.",
   "For set_timer provide: { kind, seconds, label? }.",
+  "For desktop_bridge_action provide: { kind, actionId }.",
+  "Only use desktop_bridge_action when user explicitly asks for desktop/PC actions.",
   "Include 0 to 4 actions only when user intent is clearly actionable.",
-  "Do not include unsafe, destructive, privileged OS command execution actions.",
+  "Do not include raw shell commands or destructive OS actions. Use desktop_bridge_action only with allowlisted actionId values from context.",
   'JSON output format example: {"reply":"...","actions":[{"kind":"web_search","query":"latest weather in mumbai"}]}',
 ].join("\n");
 
 type NormalizedHistoryItem = {
   role: "user" | "assistant";
   text: string;
+};
+
+type DesktopBridgeContext = {
+  enabled: boolean;
+  actionIds: string[];
 };
 
 function normalizeHistory(rawHistory: unknown): NormalizedHistoryItem[] {
@@ -71,9 +78,37 @@ function normalizeHistory(rawHistory: unknown): NormalizedHistoryItem[] {
     .slice(-12);
 }
 
+function normalizeDesktopBridgeContext(
+  rawValue: unknown,
+): DesktopBridgeContext {
+  if (!rawValue || typeof rawValue !== "object" || Array.isArray(rawValue)) {
+    return {
+      enabled: false,
+      actionIds: [],
+    };
+  }
+
+  const rawEnabled = (rawValue as { enabled?: unknown }).enabled;
+  const rawActionIds = (rawValue as { actionIds?: unknown }).actionIds;
+
+  const actionIds = Array.isArray(rawActionIds)
+    ? rawActionIds
+        .map((value) => (typeof value === "string" ? value.trim() : ""))
+        .filter((value) => /^[a-zA-Z0-9._-]{1,64}$/.test(value))
+        .filter((value, index, allValues) => allValues.indexOf(value) === index)
+        .slice(0, 40)
+    : [];
+
+  return {
+    enabled: rawEnabled === true,
+    actionIds,
+  };
+}
+
 function buildPrompt(
   message: string,
   history: NormalizedHistoryItem[],
+  desktopBridge: DesktopBridgeContext,
 ): string {
   const historyBlock =
     history.length > 0
@@ -85,11 +120,19 @@ function buildPrompt(
           .join("\n")
       : "(no prior context)";
 
+  const desktopBridgeBlock = desktopBridge.enabled
+    ? desktopBridge.actionIds.length > 0
+      ? `Desktop bridge is enabled on this device. If needed, only use desktop_bridge_action with one of these actionId values: ${desktopBridge.actionIds.join(", ")}.`
+      : "Desktop bridge is enabled but no action IDs were provided. Do not invent actionId values. Ask the user to sync/check bridge actions first."
+    : "Desktop bridge is disabled for this request. Do not include desktop_bridge_action.";
+
   return [
     ASSISTANT_IDENTITY,
     ACTION_RULES,
     "Conversation context:",
     historyBlock,
+    "Desktop bridge context:",
+    desktopBridgeBlock,
     "Latest user message:",
     message,
     "Respond as Raven and output only JSON.",
@@ -101,6 +144,7 @@ export async function POST(request: Request) {
     const body = (await request.json()) as {
       message?: unknown;
       history?: unknown;
+      desktopBridge?: unknown;
     };
 
     const message = typeof body.message === "string" ? body.message.trim() : "";
@@ -115,7 +159,8 @@ export async function POST(request: Request) {
     }
 
     const history = normalizeHistory(body.history);
-    const prompt = buildPrompt(message, history);
+    const desktopBridge = normalizeDesktopBridgeContext(body.desktopBridge);
+    const prompt = buildPrompt(message, history, desktopBridge);
 
     const client = getGeminiClient();
     const modelCandidates = getChatModelCandidates();

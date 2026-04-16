@@ -32,6 +32,7 @@ type SpeechRecognitionLike = {
 
 type SpeechRecognitionCtor = new () => SpeechRecognitionLike;
 type ActionRunMode = "manual" | "autopilot";
+type DesktopBridgeStatus = "idle" | "checking" | "ready" | "failed";
 
 interface ChatMessage {
   id: string;
@@ -53,6 +54,11 @@ const MAX_CONTEXT_MESSAGES = 12;
 const LIVE_SPEECH_ONLY = true;
 const MAX_LIVE_NETWORK_RETRIES = 2;
 const MAX_LIVE_NO_SPEECH_RETRIES = 2;
+const DEFAULT_DESKTOP_BRIDGE_URL = "http://127.0.0.1:4789";
+const BRIDGE_ENABLED_STORAGE_KEY = "raven.bridge.enabled";
+const BRIDGE_URL_STORAGE_KEY = "raven.bridge.url";
+const BRIDGE_TOKEN_STORAGE_KEY = "raven.bridge.token";
+const BRIDGE_ACTION_IDS_STORAGE_KEY = "raven.bridge.actionIds";
 
 function getSpeechRecognitionCtor(): SpeechRecognitionCtor | null {
   if (typeof window === "undefined") {
@@ -83,6 +89,39 @@ function formatClockTime(isoDate: string): string {
     hour: "numeric",
     minute: "2-digit",
   }).format(new Date(isoDate));
+}
+
+function normalizeDesktopBridgeUrl(rawUrl: string): string {
+  const fallback = DEFAULT_DESKTOP_BRIDGE_URL;
+  const trimmed = rawUrl.trim();
+
+  if (!trimmed) {
+    return fallback;
+  }
+
+  try {
+    const parsed = new URL(trimmed);
+    if (!parsed.protocol || !["http:", "https:"].includes(parsed.protocol)) {
+      return fallback;
+    }
+
+    return parsed.origin;
+  } catch {
+    return fallback;
+  }
+}
+
+function normalizeDesktopBridgeActionIds(rawValue: string): string[] {
+  return rawValue
+    .split(/[\n,]+/)
+    .map((value) => value.trim())
+    .filter((value) => /^[a-zA-Z0-9._-]{1,64}$/.test(value))
+    .filter((value, index, allValues) => allValues.indexOf(value) === index)
+    .slice(0, 40);
+}
+
+function joinBridgeUrl(baseUrl: string, path: string): string {
+  return `${baseUrl}${path.startsWith("/") ? path : `/${path}`}`;
 }
 
 function openUrlInNewTab(url: string): boolean {
@@ -156,6 +195,17 @@ export default function Home() {
   const [usingRecorderFallback, setUsingRecorderFallback] = useState(false);
   const [queuedActions, setQueuedActions] = useState<QueuedAction[]>([]);
   const [autopilotEnabled, setAutopilotEnabled] = useState(false);
+  const [desktopBridgeEnabled, setDesktopBridgeEnabled] = useState(false);
+  const [desktopBridgeUrl, setDesktopBridgeUrl] = useState(
+    DEFAULT_DESKTOP_BRIDGE_URL,
+  );
+  const [desktopBridgeToken, setDesktopBridgeToken] = useState("");
+  const [desktopBridgeActionIdsRaw, setDesktopBridgeActionIdsRaw] =
+    useState("");
+  const [desktopBridgeStatus, setDesktopBridgeStatus] =
+    useState<DesktopBridgeStatus>("idle");
+  const [desktopBridgeStatusMessage, setDesktopBridgeStatusMessage] =
+    useState("");
 
   const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
   const pendingTranscriptRef = useRef("");
@@ -169,6 +219,14 @@ export default function Home() {
   const liveRetryTimeoutRef = useRef<number | null>(null);
 
   const isBusy = isListening || isThinking;
+  const normalizedDesktopBridgeUrl = useMemo(
+    () => normalizeDesktopBridgeUrl(desktopBridgeUrl),
+    [desktopBridgeUrl],
+  );
+  const desktopBridgeActionIds = useMemo(
+    () => normalizeDesktopBridgeActionIds(desktopBridgeActionIdsRaw),
+    [desktopBridgeActionIdsRaw],
+  );
   const quickPrompts = useMemo(
     () => [
       "Find nearby coffee shops and open maps.",
@@ -191,7 +249,54 @@ export default function Home() {
     setSupportsRecorderFallback(
       Boolean(window.MediaRecorder && navigator.mediaDevices?.getUserMedia),
     );
+
+    const savedEnabled = window.localStorage.getItem(
+      BRIDGE_ENABLED_STORAGE_KEY,
+    );
+    const savedUrl = window.localStorage.getItem(BRIDGE_URL_STORAGE_KEY);
+    const savedToken = window.localStorage.getItem(BRIDGE_TOKEN_STORAGE_KEY);
+    const savedActionIds = window.localStorage.getItem(
+      BRIDGE_ACTION_IDS_STORAGE_KEY,
+    );
+
+    if (savedEnabled === "true") {
+      setDesktopBridgeEnabled(true);
+    }
+
+    if (savedUrl) {
+      setDesktopBridgeUrl(savedUrl);
+    }
+
+    if (savedToken) {
+      setDesktopBridgeToken(savedToken);
+    }
+
+    if (savedActionIds) {
+      setDesktopBridgeActionIdsRaw(savedActionIds);
+    }
   }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    window.localStorage.setItem(
+      BRIDGE_ENABLED_STORAGE_KEY,
+      String(desktopBridgeEnabled),
+    );
+    window.localStorage.setItem(BRIDGE_URL_STORAGE_KEY, desktopBridgeUrl);
+    window.localStorage.setItem(BRIDGE_TOKEN_STORAGE_KEY, desktopBridgeToken);
+    window.localStorage.setItem(
+      BRIDGE_ACTION_IDS_STORAGE_KEY,
+      desktopBridgeActionIdsRaw,
+    );
+  }, [
+    desktopBridgeActionIdsRaw,
+    desktopBridgeEnabled,
+    desktopBridgeToken,
+    desktopBridgeUrl,
+  ]);
 
   useEffect(() => {
     const scroller = chatScrollerRef.current;
@@ -273,6 +378,92 @@ export default function Home() {
 
     window.speechSynthesis.cancel();
     window.speechSynthesis.speak(utterance);
+  }
+
+  async function requestDesktopBridge<T>(
+    path: string,
+    options?: RequestInit,
+    requireEnabled = true,
+  ): Promise<T> {
+    if (requireEnabled && !desktopBridgeEnabled) {
+      throw new Error(
+        "Desktop bridge is disabled. Enable it in Action Center.",
+      );
+    }
+
+    const token = desktopBridgeToken.trim();
+    if (!token) {
+      throw new Error("Desktop bridge token is required.");
+    }
+
+    const headers = new Headers(options?.headers);
+    headers.set("Content-Type", "application/json");
+    headers.set("x-raven-bridge-token", token);
+
+    const response = await fetch(
+      joinBridgeUrl(normalizedDesktopBridgeUrl, path),
+      {
+        ...options,
+        headers,
+      },
+    );
+
+    const payload = (await response.json().catch(() => ({}))) as {
+      error?: string;
+      message?: string;
+      actions?: string[];
+      actionCount?: number;
+      [key: string]: unknown;
+    };
+
+    if (!response.ok) {
+      throw new Error(
+        payload.error ?? `Desktop bridge request failed (${response.status}).`,
+      );
+    }
+
+    return payload as T;
+  }
+
+  async function checkDesktopBridgeConnection(): Promise<void> {
+    setDesktopBridgeStatus("checking");
+    setDesktopBridgeStatusMessage("Checking local bridge...");
+
+    try {
+      const healthPayload = await requestDesktopBridge<{
+        actionCount?: number;
+      }>("/health", { method: "GET" }, false);
+
+      const actionsPayload = await requestDesktopBridge<{
+        actions?: string[];
+      }>("/actions", { method: "GET" }, false);
+
+      const actionIds = Array.isArray(actionsPayload.actions)
+        ? actionsPayload.actions
+        : [];
+
+      if (actionIds.length > 0) {
+        setDesktopBridgeActionIdsRaw(actionIds.join(", "));
+      }
+
+      const actionCount =
+        typeof healthPayload.actionCount === "number"
+          ? healthPayload.actionCount
+          : actionIds.length;
+
+      setDesktopBridgeStatus("ready");
+      setDesktopBridgeStatusMessage(
+        `Bridge connected. ${actionCount} allowlisted actions available.`,
+      );
+    } catch (error) {
+      const detail =
+        error instanceof Error
+          ? error.message
+          : "Desktop bridge connection failed.";
+
+      setDesktopBridgeStatus("failed");
+      setDesktopBridgeStatusMessage(detail);
+    }
   }
 
   async function executeAgentAction(
@@ -412,6 +603,19 @@ export default function Home() {
 
         return `Timer set for ${action.seconds} seconds.`;
       }
+      case "desktop_bridge_action": {
+        const payload = await requestDesktopBridge<{ message?: string }>(
+          "/execute",
+          {
+            method: "POST",
+            body: JSON.stringify({
+              actionId: action.actionId,
+            }),
+          },
+        );
+
+        return payload.message || `Executed desktop action: ${action.actionId}`;
+      }
       default:
         throw new Error("Unsupported action kind.");
     }
@@ -521,6 +725,10 @@ export default function Home() {
         body: JSON.stringify({
           message: text,
           history: historyForApi,
+          desktopBridge: {
+            enabled: desktopBridgeEnabled,
+            actionIds: desktopBridgeActionIds,
+          },
         }),
       });
 
@@ -985,8 +1193,91 @@ export default function Home() {
 
             <p className="action-subtitle">
               Raven can plan and run actions on this device. Sensitive actions
-              stay manual unless you run them.
+              stay manual unless you run them. Desktop actions use your local
+              companion bridge allowlist.
             </p>
+
+            <section className="bridge-settings">
+              <div className="bridge-settings-head">
+                <h3>Desktop Companion Bridge</h3>
+                <button
+                  type="button"
+                  onClick={() => {
+                    void checkDesktopBridgeConnection();
+                  }}
+                  disabled={desktopBridgeStatus === "checking"}
+                >
+                  {desktopBridgeStatus === "checking"
+                    ? "Checking..."
+                    : "Check & Sync"}
+                </button>
+              </div>
+
+              <label className="voice-toggle">
+                <input
+                  type="checkbox"
+                  checked={desktopBridgeEnabled}
+                  onChange={(event) => {
+                    setDesktopBridgeEnabled(event.target.checked);
+                    setDesktopBridgeStatus("idle");
+                    setDesktopBridgeStatusMessage("");
+                  }}
+                />
+                <span>Enable desktop bridge actions</span>
+              </label>
+
+              <label className="bridge-field" htmlFor="bridgeUrl">
+                Bridge URL
+              </label>
+              <input
+                id="bridgeUrl"
+                className="bridge-input"
+                type="text"
+                value={desktopBridgeUrl}
+                onChange={(event) => setDesktopBridgeUrl(event.target.value)}
+                onBlur={() => setDesktopBridgeUrl(normalizedDesktopBridgeUrl)}
+                placeholder={DEFAULT_DESKTOP_BRIDGE_URL}
+                autoComplete="off"
+              />
+
+              <label className="bridge-field" htmlFor="bridgeToken">
+                Bridge Token
+              </label>
+              <input
+                id="bridgeToken"
+                className="bridge-input"
+                type="password"
+                value={desktopBridgeToken}
+                onChange={(event) => setDesktopBridgeToken(event.target.value)}
+                placeholder="Set token from bridge/bridge.config.json"
+                autoComplete="off"
+              />
+
+              <label className="bridge-field" htmlFor="bridgeActions">
+                Allowlisted Action IDs (comma or newline separated)
+              </label>
+              <textarea
+                id="bridgeActions"
+                className="bridge-textarea"
+                value={desktopBridgeActionIdsRaw}
+                onChange={(event) =>
+                  setDesktopBridgeActionIdsRaw(event.target.value)
+                }
+                rows={3}
+                placeholder="open_notepad, open_calculator"
+              />
+
+              <p className="bridge-help">
+                Stored only in this browser profile. Desktop actions always run
+                through your local allowlist.
+              </p>
+
+              {desktopBridgeStatusMessage ? (
+                <p className={`bridge-status ${desktopBridgeStatus}`}>
+                  {desktopBridgeStatusMessage}
+                </p>
+              ) : null}
+            </section>
 
             {queuedActions.length === 0 ? (
               <p className="action-empty">No planned actions yet.</p>

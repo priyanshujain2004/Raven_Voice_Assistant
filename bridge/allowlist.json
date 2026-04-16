@@ -1,0 +1,22 @@
+{
+  "actions": [
+    {
+      "id": "open_notepad",
+      "type": "spawn",
+      "command": "notepad.exe",
+      "args": []
+    },
+    {
+      "id": "open_calculator",
+      "type": "spawn",
+      "command": "calc.exe",
+      "args": []
+    },
+    {
+      "id": "open_task_manager",
+      "type": "spawn",
+      "command": "taskmgr.exe",
+      "args": []
+    }
+  ]
+}

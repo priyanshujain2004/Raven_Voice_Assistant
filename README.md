@@ -12,6 +12,7 @@ It supports:
 - Automatic audio recording fallback + Gemini transcription for browsers without live recognition.
 - Gemini chat responses with conversational memory.
 - Agentic action planning and execution from prompts (Action Center).
+- Optional local desktop companion bridge for allowlisted PC actions.
 - Voice playback of responses using browser speech synthesis.
 - Mobile and laptop usage from a single deployed Vercel URL.
 
@@ -95,10 +96,58 @@ If your API key was ever committed or shared in a screenshot/text, rotate it.
 - Action Center supports cross-device actions like opening links, web search, maps, email, phone, SMS, clipboard, sharing, and timers.
 - Some actions require user gesture or popup permission depending on browser security.
 
-## 6. Project Structure
+## 6. Desktop Companion Bridge (PC Actions)
+
+Raven can trigger local desktop actions through a secure localhost bridge.
+
+How it works:
+
+- Browser sends `desktop_bridge_action` to `http://127.0.0.1:4789`.
+- Bridge requires token auth (`x-raven-bridge-token`).
+- Bridge executes only allowlisted actions from `bridge/allowlist.json`.
+- Bridge only accepts configured web origins from `bridge/bridge.config.json`.
+
+Setup:
+
+1. Edit `bridge/bridge.config.json`:
+
+- Set a long random token (16+ chars).
+- Set your allowed origins (`localhost` and your Vercel URL).
+- The bridge refuses to start while the default placeholder token is unchanged.
+
+2. Edit `bridge/allowlist.json` and keep only safe actions you trust.
+
+3. Start the bridge in a separate terminal:
+
+```bash
+npm run bridge:start
+```
+
+4. In Raven Action Center, open **Desktop Companion Bridge**:
+
+- Enable desktop bridge actions.
+- Set Bridge URL (`http://127.0.0.1:4789`).
+- Paste the same token from bridge config.
+- Click **Check & Sync** to fetch allowlisted action IDs.
+
+Prompt examples:
+
+- "Open Notepad on this PC."
+- "Run desktop action open_calculator."
+
+Security notes:
+
+- Do not expose the bridge port to LAN/Internet.
+- Keep token private and rotate if leaked.
+- Keep allowlist minimal and avoid destructive commands.
+
+## 7. Project Structure
 
 - `app/page.tsx`: Voice UI and client interactions.
 - `app/api/chat/route.ts`: Gemini conversational reply endpoint.
 - `app/api/transcribe/route.ts`: Gemini transcription endpoint for recorded audio.
 - `lib/gemini.ts`: Gemini client and model configuration.
+- `bridge/raven-desktop-bridge.mjs`: Local secure desktop companion service.
+- `bridge/bridge.config.json`: Local bridge host/token/origin config.
+- `bridge/allowlist.json`: Allowlisted desktop actions.
 - `app/manifest.ts`: PWA manifest data.

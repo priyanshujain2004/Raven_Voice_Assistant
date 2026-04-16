@@ -48,6 +48,11 @@ export type AgentAction =
       seconds: number;
       label?: string;
       title?: string;
+    }
+  | {
+      kind: "desktop_bridge_action";
+      actionId: string;
+      title?: string;
     };
 
 export interface AgentPlan {
@@ -121,6 +126,19 @@ function normalizeTimerSeconds(value: unknown): number | null {
   return Math.min(Math.max(Math.round(numericValue), 3), 86_400);
 }
 
+function normalizeDesktopActionId(value: unknown): string | null {
+  const raw = asTrimmedString(value);
+  if (!raw) {
+    return null;
+  }
+
+  if (!/^[a-zA-Z0-9._-]{1,64}$/.test(raw)) {
+    return null;
+  }
+
+  return raw;
+}
+
 function normalizeActionKind(rawKind: string): AgentAction["kind"] | "" {
   const kind = rawKind.toLowerCase();
   const map: Record<string, AgentAction["kind"]> = {
@@ -142,6 +160,10 @@ function normalizeActionKind(rawKind: string): AgentAction["kind"] | "" {
     share: "share_text",
     set_timer: "set_timer",
     timer: "set_timer",
+    desktop_bridge_action: "desktop_bridge_action",
+    desktop_action: "desktop_bridge_action",
+    run_desktop_action: "desktop_bridge_action",
+    local_desktop_action: "desktop_bridge_action",
   };
 
   return map[kind] || "";
@@ -276,6 +298,18 @@ function normalizeAction(value: unknown): AgentAction | null {
         title,
       };
     }
+    case "desktop_bridge_action": {
+      const actionId = normalizeDesktopActionId(record.actionId);
+      if (!actionId) {
+        return null;
+      }
+
+      return {
+        kind: "desktop_bridge_action",
+        actionId,
+        title,
+      };
+    }
     default:
       return null;
   }
@@ -359,6 +393,8 @@ export function describeAgentAction(action: AgentAction): string {
       return "Share text";
     case "set_timer":
       return `Set timer for ${action.seconds}s`;
+    case "desktop_bridge_action":
+      return `Run desktop action: ${action.actionId}`;
     default:
       return "Run action";
   }

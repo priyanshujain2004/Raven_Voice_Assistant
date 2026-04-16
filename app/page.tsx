@@ -50,6 +50,8 @@ interface QueuedAction {
 }
 
 const MAX_CONTEXT_MESSAGES = 12;
+const LIVE_SPEECH_ONLY = true;
+const MAX_LIVE_NETWORK_RETRIES = 2;
 
 function getSpeechRecognitionCtor(): SpeechRecognitionCtor | null {
   if (typeof window === "undefined") {
@@ -99,15 +101,10 @@ function openUrlInNewTab(url: string): boolean {
   return true;
 }
 
-function getVoiceCaptureErrorMessage(
-  errorCode: string | undefined,
-  hasRecorderFallback: boolean,
-): string {
+function getVoiceCaptureErrorMessage(errorCode: string | undefined): string {
   switch (errorCode) {
     case "network":
-      return hasRecorderFallback
-        ? "Live speech recognition service is unreachable (network). Raven switched to recorder mode. Tap the orb again to record and transcribe with Gemini."
-        : "Live speech recognition service is unreachable (network). Check internet, VPN, firewall, and browser privacy settings.";
+      return "Live speech recognition service is unreachable on this network. Use Chrome or Edge over HTTPS, allow microphone access, and disable VPN/ad-block/firewall filters that may block speech services.";
     case "not-allowed":
     case "service-not-allowed":
       return "Microphone permission is blocked for this site. Allow microphone access and try again.";
@@ -155,7 +152,6 @@ export default function Home() {
   const [supportsLiveRecognition, setSupportsLiveRecognition] = useState(false);
   const [supportsRecorderFallback, setSupportsRecorderFallback] =
     useState(false);
-  const [preferRecorderFallback, setPreferRecorderFallback] = useState(false);
   const [usingRecorderFallback, setUsingRecorderFallback] = useState(false);
   const [queuedActions, setQueuedActions] = useState<QueuedAction[]>([]);
   const [autopilotEnabled, setAutopilotEnabled] = useState(false);
@@ -167,6 +163,8 @@ export default function Home() {
   const mediaChunksRef = useRef<Blob[]>([]);
   const chatScrollerRef = useRef<HTMLDivElement | null>(null);
   const voicePlaybackRef = useRef(voicePlaybackEnabled);
+  const liveNetworkRetryCountRef = useRef(0);
+  const liveRetryTimeoutRef = useRef<number | null>(null);
 
   const isBusy = isListening || isThinking;
   const quickPrompts = useMemo(
@@ -188,7 +186,6 @@ export default function Home() {
     }
 
     setSupportsLiveRecognition(Boolean(getSpeechRecognitionCtor()));
-    setPreferRecorderFallback(false);
     setSupportsRecorderFallback(
       Boolean(window.MediaRecorder && navigator.mediaDevices?.getUserMedia),
     );
@@ -208,6 +205,10 @@ export default function Home() {
 
   useEffect(() => {
     return () => {
+      if (liveRetryTimeoutRef.current !== null) {
+        window.clearTimeout(liveRetryTimeoutRef.current);
+      }
+
       recognitionRef.current?.stop();
       mediaRecorderRef.current?.stop();
       mediaStreamRef.current?.getTracks().forEach((track) => track.stop());
@@ -675,6 +676,11 @@ export default function Home() {
       return;
     }
 
+    if (liveRetryTimeoutRef.current !== null) {
+      window.clearTimeout(liveRetryTimeoutRef.current);
+      liveRetryTimeoutRef.current = null;
+    }
+
     setErrorMessage("");
     pendingTranscriptRef.current = "";
     setLiveTranscript("");
@@ -707,19 +713,49 @@ export default function Home() {
       setLiveTranscript(interim);
 
       if (finalText) {
+        liveNetworkRetryCountRef.current = 0;
         pendingTranscriptRef.current = finalText;
       }
     };
 
     recognition.onerror = (event: { error?: string }) => {
       const errorCode = event.error;
-      if (errorCode === "network" && supportsRecorderFallback) {
-        setPreferRecorderFallback(true);
+
+      if (errorCode === "aborted") {
+        setIsListening(false);
+        setLiveTranscript("");
+        return;
       }
 
-      setErrorMessage(
-        getVoiceCaptureErrorMessage(errorCode, supportsRecorderFallback),
-      );
+      if (errorCode === "network") {
+        if (liveNetworkRetryCountRef.current < MAX_LIVE_NETWORK_RETRIES) {
+          const nextAttempt = liveNetworkRetryCountRef.current + 1;
+          liveNetworkRetryCountRef.current = nextAttempt;
+          const retryDelayMs = 650 * nextAttempt;
+
+          setErrorMessage(
+            `Live speech connection dropped. Reconnecting (${nextAttempt}/${MAX_LIVE_NETWORK_RETRIES})...`,
+          );
+          setIsListening(false);
+          setLiveTranscript("");
+
+          liveRetryTimeoutRef.current = window.setTimeout(() => {
+            liveRetryTimeoutRef.current = null;
+            startLiveRecognition();
+          }, retryDelayMs);
+
+          return;
+        }
+
+        setErrorMessage(getVoiceCaptureErrorMessage(errorCode));
+        setIsListening(false);
+        setLiveTranscript("");
+        return;
+      }
+
+      liveNetworkRetryCountRef.current = 0;
+
+      setErrorMessage(getVoiceCaptureErrorMessage(errorCode));
       setIsListening(false);
       setLiveTranscript("");
     };
@@ -732,6 +768,7 @@ export default function Home() {
       pendingTranscriptRef.current = "";
 
       if (transcript) {
+        liveNetworkRetryCountRef.current = 0;
         void submitPrompt(transcript, "voice");
       }
     };
@@ -741,6 +778,13 @@ export default function Home() {
   }
 
   function stopListening(): void {
+    if (liveRetryTimeoutRef.current !== null) {
+      window.clearTimeout(liveRetryTimeoutRef.current);
+      liveRetryTimeoutRef.current = null;
+    }
+
+    liveNetworkRetryCountRef.current = 0;
+
     recognitionRef.current?.stop();
 
     if (
@@ -761,18 +805,20 @@ export default function Home() {
       return;
     }
 
-    if (preferRecorderFallback && supportsRecorderFallback) {
-      await startRecorderFallback();
-      return;
-    }
-
     if (supportsLiveRecognition) {
       startLiveRecognition();
       return;
     }
 
-    if (supportsRecorderFallback) {
+    if (!LIVE_SPEECH_ONLY && supportsRecorderFallback) {
       await startRecorderFallback();
+      return;
+    }
+
+    if (supportsRecorderFallback) {
+      setErrorMessage(
+        "Live speech only mode is enabled. Live recognition is unavailable in this browser. Use Chrome or Edge over HTTPS.",
+      );
       return;
     }
 
@@ -873,18 +919,10 @@ export default function Home() {
             </p>
           ) : null}
 
-          {supportsLiveRecognition && preferRecorderFallback ? (
-            <p className="compat-note">
-              Live speech recognition is temporarily unreachable on this
-              network. Raven will record audio and use Gemini transcription for
-              voice input.
-            </p>
-          ) : null}
-
           {!supportsLiveRecognition ? (
             <p className="compat-note">
-              Live speech recognition is unavailable in this browser. Raven will
-              record audio and ask Gemini to transcribe it after you stop.
+              Live speech recognition is unavailable in this browser. Use Chrome
+              or Edge over HTTPS for live voice mode.
             </p>
           ) : null}
 

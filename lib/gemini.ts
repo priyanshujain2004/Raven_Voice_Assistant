@@ -125,6 +125,20 @@ export function isQuotaOrRateLimitError(error: unknown): boolean {
   );
 }
 
+export function isServiceUnavailableError(error: unknown): boolean {
+  const message = getErrorMessage(error).toLowerCase();
+  const status = (error as { status?: number })?.status;
+
+  return (
+    status === 503 ||
+    message.includes("503") ||
+    message.includes("unavailable") ||
+    message.includes("high demand") ||
+    message.includes("currently experiencing high demand") ||
+    message.includes('"status":"unavailable"')
+  );
+}
+
 export function getGeminiErrorStatus(error: unknown): number {
   const status = (error as { status?: number })?.status;
   if (typeof status === "number") {
@@ -139,6 +153,10 @@ export function getGeminiErrorStatus(error: unknown): number {
 
   if (isQuotaOrRateLimitError(error)) {
     return 429;
+  }
+
+  if (isServiceUnavailableError(error)) {
+    return 503;
   }
 
   if (isModelNotFoundError(error)) {
@@ -162,6 +180,10 @@ export function formatGeminiErrorForClient(error: unknown): string {
 
   if (isModelNotFoundError(error)) {
     return "Configured Gemini model is not available for your key/API version. Use a supported model or update API version.";
+  }
+
+  if (isServiceUnavailableError(error)) {
+    return "Gemini is under high demand right now for the selected models. Raven already tried fallback models. Please retry in about 30 to 90 seconds.";
   }
 
   if (message.length > 420) {

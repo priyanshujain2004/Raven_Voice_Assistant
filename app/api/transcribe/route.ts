@@ -6,6 +6,7 @@ import {
   getTranscribeModelCandidates,
   isModelNotFoundError,
   isQuotaOrRateLimitError,
+  isServiceUnavailableError,
 } from "@/lib/gemini";
 
 export const runtime = "nodejs";
@@ -86,7 +87,11 @@ export async function POST(request: Request) {
 
         return NextResponse.json({ transcript, model: modelName });
       } catch (error) {
-        if (isModelNotFoundError(error) || isQuotaOrRateLimitError(error)) {
+        if (
+          isModelNotFoundError(error) ||
+          isQuotaOrRateLimitError(error) ||
+          isServiceUnavailableError(error)
+        ) {
           lastModelError =
             error instanceof Error
               ? error

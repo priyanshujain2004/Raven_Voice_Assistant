@@ -52,6 +52,7 @@ interface QueuedAction {
 const MAX_CONTEXT_MESSAGES = 12;
 const LIVE_SPEECH_ONLY = true;
 const MAX_LIVE_NETWORK_RETRIES = 2;
+const MAX_LIVE_NO_SPEECH_RETRIES = 2;
 
 function getSpeechRecognitionCtor(): SpeechRecognitionCtor | null {
   if (typeof window === "undefined") {
@@ -164,6 +165,7 @@ export default function Home() {
   const chatScrollerRef = useRef<HTMLDivElement | null>(null);
   const voicePlaybackRef = useRef(voicePlaybackEnabled);
   const liveNetworkRetryCountRef = useRef(0);
+  const liveNoSpeechRetryCountRef = useRef(0);
   const liveRetryTimeoutRef = useRef<number | null>(null);
 
   const isBusy = isListening || isThinking;
@@ -712,6 +714,10 @@ export default function Home() {
 
       setLiveTranscript(interim);
 
+      if (interim || finalText) {
+        liveNoSpeechRetryCountRef.current = 0;
+      }
+
       if (finalText) {
         liveNetworkRetryCountRef.current = 0;
         pendingTranscriptRef.current = finalText;
@@ -722,6 +728,31 @@ export default function Home() {
       const errorCode = event.error;
 
       if (errorCode === "aborted") {
+        setIsListening(false);
+        setLiveTranscript("");
+        return;
+      }
+
+      if (errorCode === "no-speech") {
+        if (liveNoSpeechRetryCountRef.current < MAX_LIVE_NO_SPEECH_RETRIES) {
+          const nextAttempt = liveNoSpeechRetryCountRef.current + 1;
+          liveNoSpeechRetryCountRef.current = nextAttempt;
+
+          setErrorMessage("");
+          setIsListening(false);
+          setLiveTranscript("");
+
+          liveRetryTimeoutRef.current = window.setTimeout(() => {
+            liveRetryTimeoutRef.current = null;
+            startLiveRecognition();
+          }, 350);
+
+          return;
+        }
+
+        setErrorMessage(
+          "No speech was detected. Speak right after tapping the orb, keep the mic close, and avoid background noise.",
+        );
         setIsListening(false);
         setLiveTranscript("");
         return;
@@ -769,6 +800,7 @@ export default function Home() {
 
       if (transcript) {
         liveNetworkRetryCountRef.current = 0;
+        liveNoSpeechRetryCountRef.current = 0;
         void submitPrompt(transcript, "voice");
       }
     };
@@ -784,6 +816,7 @@ export default function Home() {
     }
 
     liveNetworkRetryCountRef.current = 0;
+    liveNoSpeechRetryCountRef.current = 0;
 
     recognitionRef.current?.stop();
 

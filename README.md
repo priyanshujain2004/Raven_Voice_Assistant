@@ -1,36 +1,80 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Raven Voice Agent (Gemini)
 
-## Getting Started
+Raven is a personal AI voice assistant web app built with Next.js and Gemini.
 
-First, run the development server:
+It supports:
+
+- Voice input with live browser speech recognition when available.
+- Automatic audio recording fallback + Gemini transcription for browsers without live recognition.
+- Gemini chat responses with conversational memory.
+- Voice playback of responses using browser speech synthesis.
+- Mobile and laptop usage from a single deployed Vercel URL.
+
+## 1. Local Setup
+
+1. Install dependencies:
+
+```bash
+npm install
+```
+
+2. Create environment variables:
+
+```bash
+# macOS/Linux
+cp .env.example .env.local
+
+# Windows PowerShell
+Copy-Item .env.example .env.local
+```
+
+3. Add your Gemini API key to `.env.local`:
+
+```bash
+GEMINI_API_KEY=your_key_here
+```
+
+4. Start development server:
 
 ```bash
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+5. Open `http://localhost:3000`.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## 2. Environment Variables
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+Required:
 
-## Learn More
+- `GEMINI_API_KEY`: Your Gemini API key.
 
-To learn more about Next.js, take a look at the following resources:
+Optional:
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+- `GEMINI_CHAT_MODEL`: Defaults to `gemini-2.5-pro`.
+- `GEMINI_TRANSCRIBE_MODEL`: Defaults to `gemini-2.0-flash`.
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+## 3. Deploy to Vercel
 
-## Deploy on Vercel
+1. Push this folder to GitHub.
+2. Import the repository in Vercel.
+3. In Vercel project settings, add:
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+- `GEMINI_API_KEY`
+- Optional model overrides (`GEMINI_CHAT_MODEL`, `GEMINI_TRANSCRIBE_MODEL`)
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+4. Deploy.
+5. Open your Vercel URL from laptop and phone.
+
+## 4. Browser Notes
+
+- Best voice capture experience: Chrome/Edge.
+- On browsers that do not support live speech recognition, Raven records audio and transcribes via Gemini.
+- Voice playback depends on browser speech synthesis voices installed on the device.
+
+## 5. Project Structure
+
+- `app/page.tsx`: Voice UI and client interactions.
+- `app/api/chat/route.ts`: Gemini conversational reply endpoint.
+- `app/api/transcribe/route.ts`: Gemini transcription endpoint for recorded audio.
+- `lib/gemini.ts`: Gemini client and model configuration.
+- `app/manifest.ts`: PWA manifest data.

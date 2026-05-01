@@ -13,6 +13,12 @@
       "args": []
     },
     {
+      "id": "open_camera",
+      "type": "spawn",
+      "command": "camera.exe",
+      "args": []
+    },
+    {
       "id": "open_task_manager",
       "type": "spawn",
       "command": "taskmgr.exe",
